@@ -103,16 +103,15 @@
             return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount);
         };
         const formatPercent = (value) => {
+            // NOTE: 'value' here is already a decimal (e.g., 0.15) after division in parseCSV
             return (value * 100).toFixed(2) + '%';
         };
 
         // --- CSV PARSING FUNCTION ---
         function parseCSV(csvText) {
             const [headerLine, ...dataLines] = csvText.trim().split('\n');
-            // Clean up headers (remove quotes and extra whitespace)
             const headers = headerLine.split(',').map(h => h.trim().replace(/['"]+/g, ''));
 
-            // Map expected Sheet column names to internal property names
             const propMap = {
                 'Scheme Name': 'schemeName',
                 'Symbol': 'symbol',
@@ -124,11 +123,9 @@
             };
 
             return dataLines.map(line => {
-                // Use simple split for basic CSV structure
                 const values = line.split(','); 
                 const fund = {};
 
-                // Find the index of the scheme name column to ensure we have valid data
                 const schemeNameIndex = headers.indexOf('Scheme Name');
                 if (schemeNameIndex === -1 || !values[schemeNameIndex] || values[schemeNameIndex].trim() === '') {
                     return null; // Skip empty or invalid rows
@@ -139,10 +136,15 @@
                     if (!prop) return; // Skip columns we don't need
 
                     const rawValue = values[index] ? values[index].trim().replace(/['"]+/g, '') : '';
+                    const parsedValue = parseFloat(rawValue) || 0;
                     
-                    // Convert numeric fields to numbers
-                    if (['invested', 'value', 'returnPct', 'xirr', 'netUnits'].includes(prop)) {
-                        fund[prop] = parseFloat(rawValue) || 0;
+                    if (['invested', 'value', 'netUnits'].includes(prop)) {
+                        // Regular currency/unit numbers
+                        fund[prop] = parsedValue;
+                    } else if (['returnPct', 'xirr'].includes(prop)) {
+                        // FIX: Percentage numbers (e.g., 15.0 in the sheet) are divided by 100 here 
+                        // to convert them to decimal (0.15) for correct application math.
+                        fund[prop] = parsedValue / 100;
                     } else {
                         fund[prop] = rawValue;
                     }
@@ -157,7 +159,7 @@
 
         // --- DATA FETCHING ---
         async function fetchAndProcessData() {
-            // 1. Check for file protocol error locally
+            // Check for file protocol error locally
             if (isFileProtocol()) {
                  document.getElementById('fundDetailsCard').innerHTML = getErrorMessage(
                     'Local file access error! Please run this file using a **local web server** (e.g., using Python\'s `http.server` or VS Code\'s Live Server extension) instead of opening the file directly from your hard drive.'
