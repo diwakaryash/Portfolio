@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Investment Dashboard</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        /* Custom styling for metric cards */
+        .metric-card {
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            transition: transform 0.3s ease;
+            border-radius: 0.75rem; /* rounded-xl equivalent */
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+        /* Styling for responsive chart container */
+        .ring-chart-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 100%; /* 1:1 Aspect Ratio for responsiveness */
+        }
+        .ring-chart-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <!-- Load Chart.js for the ring chart -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Portfolio Overview</h1>
+
+        <!-- Top Metrics Row (Ring Chart and Key Financials) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+
+            <!-- Ring Chart Card (Allocation Slicer Visual) -->
+            <div class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Allocation by Value</h2>
+                <div class="ring-chart-container">
+                    <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
+                </div>
+            </div>
+
+            <!-- Key Financial Metrics Cards -->
+            <div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-4 lg:col-span-2">
+                <div id="metric-invested" class="metric-card bg-white p-5 border-l-4 border-indigo-500">
+                    <p class="text-sm font-medium text-gray-500">Total Invested</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="totalInvested">Loading...</p>
+                </div>
+                <div id="metric-value" class="metric-card bg-white p-5 border-l-4 border-green-500">
+                    <p class="text-sm font-medium text-gray-500">Current Value</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="currentValue">Loading...</p>
+                </div>
+                <div id="metric-return" class="metric-card bg-white p-5 border-l-4 border-yellow-500">
+                    <p class="text-sm font-medium text-gray-500">Total Return</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="totalReturn">Loading...</p>
+                </div>
+                <div id="metric-xirr" class="metric-card bg-white p-5 border-l-4 border-red-500">
+                    <p class="text-sm font-medium text-gray-500">Overall XIRR</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="overallXirr">Loading...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Fund Table -->
+        <div class="bg-white p-6 rounded-xl metric-card shadow-lg" id="fundDetailsCard">
+            <!-- Content will be replaced by loading message, then restored by script -->
+            <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
+            <div class="p-8 text-center text-lg text-indigo-500">Loading portfolio data from Google Sheets...</div>
+        </div>
+    </div>
+
+    <script>
+        // --- DATA SOURCE CONFIGURATION ---
+        // Your published Google Sheet CSV URL (already set).
+        const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5ozzUpj35PGfBGKsdwKhviBFogErmsLxcKaLWJ_rbxDcPLI1LPUxp6EwpLjEQWyIbvMs2RT8VI6MH/pub?gid=726228322&single=true&output=csv'; 
+        
+        // Data variables
+        let fundData = []; 
+        let currentData = [];
+        let allocationChart = null;
+
+
+        // --- UTILITY FUNCTIONS ---
+        const isFileProtocol = () => window.location.protocol === 'file:';
+
+        const formatCurrency = (amount) => {
+            // Using 'en-IN' for Indian Rupee format, assuming data is in INR
+            return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount);
+        };
+        const formatPercent = (value) => {
+            return (value * 100).toFixed(2) + '%';
+        };
+
+        // --- CSV PARSING FUNCTION ---
+        function parseCSV(csvText) {
+            const [headerLine, ...dataLines] = csvText.trim().split('\n');
+            // Clean up headers (remove quotes and extra whitespace)
+            const headers = headerLine.split(',').map(h => h.trim().replace(/['"]+/g, ''));
+
+            // Map expected Sheet column names to internal property names
+            const propMap = {
+                'Scheme Name': 'schemeName',
+                'Symbol': 'symbol',
+                'Invested': 'invested',
+                'Value': 'value',
+                'Return %': 'returnPct',
+                'XIRR': 'xirr',
+                'Net Units': 'netUnits',
+            };
+
+            return dataLines.map(line => {
+                // Use simple split for basic CSV structure
+                const values = line.split(','); 
+                const fund = {};
+
+                // Find the index of the scheme name column to ensure we have valid data
+                const schemeNameIndex = headers.indexOf('Scheme Name');
+                if (schemeNameIndex === -1 || !values[schemeNameIndex] || values[schemeNameIndex].trim() === '') {
+                    return null; // Skip empty or invalid rows
+                }
+
+                headers.forEach((header, index) => {
+                    const prop = propMap[header];
+                    if (!prop) return; // Skip columns we don't need
+
+                    const rawValue = values[index] ? values[index].trim().replace(/['"]+/g, '') : '';
+                    
+                    // Convert numeric fields to numbers
+                    if (['invested', 'value', 'returnPct', 'xirr', 'netUnits'].includes(prop)) {
+                        fund[prop] = parseFloat(rawValue) || 0;
+                    } else {
+                        fund[prop] = rawValue;
+                    }
+                });
+
+                // Calculate 'returns' client-side based on fetched 'value' and 'invested'
+                fund.returns = fund.value - fund.invested;
+                
+                return fund;
+            }).filter(f => f); // Filter out null (invalid) rows
+        }
+
+        // --- DATA FETCHING ---
+        async function fetchAndProcessData() {
+            // 1. Check for file protocol error locally
+            if (isFileProtocol()) {
+                 document.getElementById('fundDetailsCard').innerHTML = getErrorMessage(
+                    'Local file access error! Please run this file using a **local web server** (e.g., using Python\'s `http.server` or VS Code\'s Live Server extension) instead of opening the file directly from your hard drive.'
+                );
+                return;
+            }
+            
+            const dataUrl = SHEET_URL;
+
+            try {
+                const fundDetailsDiv = document.getElementById('fundDetailsCard');
+
+                const response = await fetch(dataUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const csvText = await response.text();
+                
+                // Parse the fetched data
+                const parsedData = parseCSV(csvText);
+
+                if (parsedData.length === 0) {
+                    fundDetailsDiv.innerHTML = getErrorMessage('No data found or failed to parse. Check your Google Sheet publication URL and data format.');
+                    return;
+                }
+
+                // Update global data stores
+                fundData = parsedData;
+                currentData = [...fundData];
+
+                // Restore original table structure before rendering
+                fundDetailsDiv.innerHTML = getOriginalTableStructure();
+                
+                // Must re-attach listeners now that the HTML elements are restored
+                setupListeners();
+
+                // Initial render
+                calculateOverallMetrics(fundData);
+                createRingChart(fundData);
+                applySort(); // Apply default sort
+
+                
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('Failed to load data. Please check console for errors or confirm your <code class="bg-gray-200 p-1 rounded text-sm">SHEET_URL</code> is correct and published publicly.');
+                
+                // Clear metric cards on error
+                document.getElementById('totalInvested').textContent = '$0.00';
+                document.getElementById('currentValue').textContent = '$0.00';
+                document.getElementById('totalReturn').textContent = '$0.00';
+                document.getElementById('overallXirr').textContent = '0.00%';
+            }
+        }
+
+        // Helper to get error message HTML
+        function getErrorMessage(message) {
+            return `<h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2><div class="p-8 text-center text-lg text-red-500">${message}</div>`;
+        }
+
+        // Helper to restore the table structure after displaying a loading message
+        function getOriginalTableStructure() {
+            return `
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
+                <div class="mb-4 flex flex-col sm:flex-row gap-3">
+                    <input type="text" id="schemeSearch" placeholder="Search Scheme Name..." class="p-2 border border-gray-300 rounded-lg w-full sm:w-1/3 focus:ring-indigo-500 focus:border-indigo-500">
+                    <select id="sortSelect" class="p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="return_desc">Sort by Return % (Highest)</option>
+                        <option value="value_desc">Sort by Current Value (Highest)</option>
+                        <option value="xirr_desc">Sort by XIRR (Highest)</option>
+                    </select>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('scheme')">Scheme Name</th>
+                                <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('invested')">Invested</th>
+                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('value')">Value</th>
+                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('return_pct')">Return %</th>
+                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('xirr')">XIRR</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fundTableBody" class="bg-white divide-y divide-gray-200">
+                            <!-- Data rows will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+
+        // --- DASHBOARD RENDERING ---
+        function calculateOverallMetrics(data) {
+            const totalInvested = data.reduce((sum, fund) => sum + fund.invested, 0);
+            const currentValue = data.reduce((sum, fund) => sum + fund.value, 0);
+            const totalReturn = currentValue - totalInvested;
+            
+            // Calculate a weighted average XIRR
+            const overallXirr = (data.reduce((sum, fund) => sum + fund.xirr * fund.invested, 0) / totalInvested) || 0.1185; 
+
+            document.getElementById('totalInvested').textContent = formatCurrency(totalInvested);
+            document.getElementById('currentValue').textContent = formatCurrency(currentValue);
+            document.getElementById('totalReturn').textContent = formatCurrency(totalReturn);
+            document.getElementById('overallXirr').textContent = formatPercent(overallXirr);
+
+            // Update Return Pct card color based on performance
+            const returnElement = document.getElementById('metric-return');
+            returnElement.classList.remove('border-yellow-500', 'border-green-500', 'border-red-500');
+            
+            if (totalReturn > 0) {
+                returnElement.classList.add('border-green-500');
+            } else if (totalReturn < 0) {
+                returnElement.classList.add('border-red-500');
+            } else {
+                returnElement.classList.add('border-yellow-500');
+            }
+        }
+
+        function createRingChart(data) {
+            const ctx = document.getElementById('allocationChart').getContext('2d');
+            
+            // Destroy existing chart if it exists
+            if (allocationChart) {
+                allocationChart.destroy();
+            }
+
+            // Filter out funds with zero or negative value for the chart
+            const chartRelevantData = data.filter(f => f.value > 0);
+
+            const totalValue = chartRelevantData.reduce((sum, fund) => sum + fund.value, 0);
+
+            // Generate unique colors based on data length
+            const generateColors = (count) => {
+                const colors = [];
+                for (let i = 0; i < count; i++) {
+                    // Simple HSL generation for distinct, vibrant colors
+                    colors.push(`hsl(${(i * 50) % 360}, 70%, 50%)`);
+                }
+                return colors;
+            };
+
+            const chartData = {
+                labels: chartRelevantData.map(f => f.schemeName),
+                datasets: [{
+                    data: chartRelevantData.map(f => f.value),
+                    backgroundColor: generateColors(chartRelevantData.length),
+                    hoverOffset: 8,
+                }]
+            };
+
+            allocationChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '75%', // Creates the ring/donut chart effect
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                font: {
+                                    family: 'Inter',
+                                    size: 11
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    const value = context.parsed;
+                                    const percentage = totalValue > 0 ? (value / totalValue) * 100 : 0;
+                                    label += formatCurrency(value) + ' (' + percentage.toFixed(1) + '%)';
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderTable(data) {
+            const tbody = document.getElementById('fundTableBody');
+            if (!tbody) return; // Guard clause
+            tbody.innerHTML = '';
+
+            if (data.length === 0) {
+                tbody.innerHTML = `<tr><td colspan='6' class='px-3 py-4 text-center text-sm text-gray-500'>No funds match the criteria.</td></tr>`;
+                return;
+            }
+
+            data.forEach(fund => {
+                // Calculate return percentage for table coloring
+                const returnClass = fund.returns >= 0 ? 'text-green-600' : 'text-red-600';
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-100 transition duration-150 ease-in-out';
+                row.innerHTML = `
+                    <td class='px-3 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>${fund.schemeName}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-500'>${fund.symbol}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.invested)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.value)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm font-semibold ${returnClass} text-right'>${formatPercent(fund.returnPct)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-700 text-right'>${formatPercent(fund.xirr)}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        // --- FILTERING & SORTING LOGIC ---
+
+        function filterData() {
+            const searchValue = document.getElementById('schemeSearch').value.toLowerCase();
+            
+            let filteredData = fundData.filter(fund => 
+                fund.schemeName.toLowerCase().includes(searchValue)
+            );
+            
+            currentData = filteredData;
+            applySort();
+        }
+
+        function applySort() {
+            const sortSelect = document.getElementById('sortSelect');
+            const sortKey = sortSelect.value;
+            let sortProp;
+            let sortOrder;
+
+            // Split the sort key (e.g., 'return_desc')
+            if (sortKey.includes('_')) {
+                [sortProp, sortOrder] = sortKey.split('_');
+            } else {
+                sortProp = sortKey;
+                sortOrder = 'asc'; 
+            }
+
+            currentData.sort((a, b) => {
+                const aVal = a[getPropName(sortProp)];
+                const bVal = b[getPropName(sortProp)];
+                
+                let comparison = 0;
+                if (aVal > bVal) {
+                    comparison = 1;
+                } else if (aVal < bVal) {
+                    comparison = -1;
+                }
+
+                // Reverse comparison if descending order is requested
+                return sortOrder === 'desc' ? comparison * -1 : comparison;
+            });
+
+            // Re-render all components
+            calculateOverallMetrics(currentData.length > 0 ? currentData : fundData);
+            createRingChart(currentData);
+            renderTable(currentData);
+        }
+
+        function getPropName(key) {
+            switch(key) {
+                case 'scheme': return 'schemeName';
+                case 'invested': return 'invested';
+                case 'value': return 'value';
+                case 'return_pct': // Only check for returnPct
+                case 'xirr': return 'xirr';
+                default: return key;
+            }
+        }
+
+        // Allows header click sorting, overriding the dropdown
+        function sortTable(property) {
+             const sortSelect = document.getElementById('sortSelect');
+             if (!sortSelect) return; // Guard clause
+             let newSort = `${property}_desc`;
+            
+             if (sortSelect.value.startsWith(property)) {
+                 // Toggle sort order
+                 newSort = sortSelect.value.endsWith('_desc') ? `${property}_asc` : `${property}_desc`;
+             }
+             
+             // Check if the property corresponds to an option in the dropdown before setting the value
+             const optionExists = Array.from(sortSelect.options).some(option => option.value.startsWith(property));
+             if (optionExists) {
+                sortSelect.value = newSort;
+             }
+
+             applySort();
+        }
+        
+        // --- EVENT LISTENERS SETUP ---
+        const setupListeners = () => {
+            const schemeSearch = document.getElementById('schemeSearch');
+            const sortSelect = document.getElementById('sortSelect');
+            if (schemeSearch) schemeSearch.addEventListener('input', filterData);
+            if (sortSelect) sortSelect.addEventListener('change', applySort);
+        };
+
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Start the asynchronous data fetching process
+            fetchAndProcessData(); 
+        });
+
+    </script>
+</body>
+</html>
