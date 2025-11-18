@@ -48,7 +48,7 @@
         }
     </style>
     <!-- Load Chart.js for the ring chart --><script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
-    <!-- REMOVED: Data Labels Plugin (Using Legend for stability) --></head>
+    <!-- Load Chart.js Data Labels Plugin --><script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script></head>
 <body class="p-4 md:p-8">
 
     <div class="max-w-7xl mx-auto">
@@ -64,14 +64,14 @@
 
         <!-- Main Dynamic Content Area --><!-- Default grid is 1 column on mobile, 3 on desktop. Will be dynamically changed to 2 columns if a Tag is selected --><div id="mainContentGrid" class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
 
-            <!-- Ring Chart Card (Always visible, content changes) --><div id="chartCard" class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
+            <!-- Ring Chart Card (Always visible, content changes) --><div id="chartCard" class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-2"> <!-- CHART IS NOW lg:col-span-2 -->
                 <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2" id="chartTitle">Allocation by Tag</h2>
                 <div class="ring-chart-container">
                     <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
                 </div>
             </div>
 
-            <!-- Key Financial Metrics Cards (Hidden when Tag filter is active) --><div id="keyMetricsWrapper" class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-4 lg:col-span-2 transition-opacity duration-300">
+            <!-- Key Financial Metrics Cards (Hidden when Tag filter is active) --><div id="keyMetricsWrapper" class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-1 gap-4 lg:col-span-1 transition-opacity duration-300"> <!-- METRICS IS NOW lg:col-span-1 -->
                 <div id="metric-invested" class="metric-card bg-white p-5 border-l-4 border-indigo-500">
                     <p class="text-sm font-medium text-gray-500">Total Invested</p>
                     <p class="text-2xl font-bold text-gray-800 mt-1" id="totalInvested">Loading...</p>
@@ -263,20 +263,31 @@
                 mainGrid.classList.remove('lg:grid-cols-3');
                 mainGrid.classList.add('lg:grid-cols-2');
                 
-                // Move table visually next to chart (adjust CSS class for two columns)
-                chartCard.classList.remove('lg:col-span-1');
+                // --- SIZE CHANGE START: CHART 1/2, METRICS HIDDEN ---
+                chartCard.classList.remove('lg:col-span-2');
                 chartCard.classList.add('lg:col-span-1');
+                
+                metricsWrapper.classList.remove('lg:col-span-1');
+                metricsWrapper.classList.add('lg:col-span-2'); // Set default for metrics wrapper for next time
+
+                // Move table visually next to chart (adjust CSS class for two columns)
                 fundDetailsCard.classList.remove('lg:col-span-3'); // Reset existing
                 fundDetailsCard.classList.add('lg:col-span-1', 'order-2'); // Makes table appear right of chart
                 
             } else {
-                // Overview View (Chart + Metrics)
+                // Overview View (Larger Chart + Smaller Metrics)
                 metricsWrapper.classList.remove('hidden', 'opacity-0');
                 mainGrid.classList.remove('lg:grid-cols-2');
                 mainGrid.classList.add('lg:grid-cols-3');
                 
-                chartCard.classList.remove('lg:col-span-2');
-                chartCard.classList.add('lg:col-span-1');
+                // --- SIZE CHANGE START: CHART 2/3, METRICS 1/3 ---
+                chartCard.classList.remove('lg:col-span-1'); 
+                chartCard.classList.add('lg:col-span-2'); // Chart is now 2 columns wide
+                
+                metricsWrapper.classList.remove('lg:col-span-2'); 
+                metricsWrapper.classList.add('lg:col-span-1'); // Metrics is now 1 column wide
+                // --- SIZE CHANGE END ---
+
                 fundDetailsCard.classList.remove('lg:col-span-1', 'order-2'); // Reset layout
             }
 
