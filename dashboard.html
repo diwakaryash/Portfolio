@@ -27,7 +27,7 @@
             /* 1:1 Aspect Ratio for responsiveness */
             padding-bottom: 100%; 
             
-            /* ADDED: Flexbox to center the canvas */
+            /* Centering fix: Use Flexbox on the parent to center the content */
             display: flex;
             justify-content: center;
             align-items: center;
@@ -67,7 +67,7 @@
 
             <!-- Ring Chart Card (Always visible, content changes) --><div id="chartCard" class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
                 <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2" id="chartTitle">Allocation by Tag</h2>
-                <div class="ring-chart-container pt-4 pb-4"> <!-- ADDED vertical padding to push chart down -->
+                <div class="ring-chart-container"> <!-- REVERTED: Removed inline vertical padding (pt-8 pb-8) -->
                     <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
                 </div>
             </div>
@@ -100,7 +100,6 @@
 
     <script>
         // --- DATA SOURCE CONFIGURATION ---
-        // FIX: Changed /sheets/ to /spreadsheets/ to resolve common 'Failed to fetch' error in hosted environments.
         const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5ozzUpj35PGfBGKsdwKhviBFogErmsLxcKaLWJ_rbxDcPLI1LPUxp6EwpLjEQWyIbvMs2RT8VI6MH/pub?gid=1275914219&single=true&output=csv'; 
         
         let fundData = []; 
