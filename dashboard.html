@@ -4,10 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Investment Dashboard V2</title>
-    <!-- Load Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Use Inter font -->
-    <style>
+    <!-- Load Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font --><style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body {
             font-family: 'Inter', sans-serif;
@@ -28,6 +26,11 @@
             width: 100%;
             /* 1:1 Aspect Ratio for responsiveness */
             padding-bottom: 100%; 
+            
+            /* ADDED: Flexbox to center the canvas */
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         .ring-chart-canvas {
             position: absolute;
@@ -44,37 +47,32 @@
             background-color: #f1f5f9; /* light blue-gray hover */
         }
     </style>
-    <!-- Load Chart.js for the ring chart -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <!-- Load Chart.js for the ring chart --><script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <!-- Load Chart.js Data Labels Plugin --><script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 </head>
 <body class="p-4 md:p-8">
 
     <div class="max-w-7xl mx-auto">
         <h1 class="text-3xl font-bold text-gray-800 mb-6">Portfolio Overview</h1>
 
-        <!-- Owner Filter (Global Control) -->
-        <div class="mb-6 bg-white p-4 rounded-xl shadow-md flex flex-col sm:flex-row items-center gap-4">
+        <!-- Owner Filter (Global Control) --><div class="mb-6 bg-white p-4 rounded-xl shadow-md flex flex-col sm:flex-row items-center gap-4">
             <label for="ownerFilter" class="text-sm font-semibold text-gray-700 whitespace-nowrap">Filter by Owner:</label>
             <select id="ownerFilter" class="filter-select w-full sm:w-auto min-w-[150px]">
                 <option value="All">All Owners</option>
-                <!-- Owner options populated by JS -->
-            </select>
+                <!-- Owner options populated by JS --></select>
             <div id="loadingStatus" class="text-sm text-indigo-500 ml-auto hidden">Loading...</div>
         </div>
 
-        <!-- Top Metrics Row (Ring Chart and Key Financials) -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <!-- Main Dynamic Content Area --><!-- Default grid is 1 column on mobile, 3 on desktop. Will be dynamically changed to 2 columns if a Tag is selected --><div id="mainContentGrid" class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
 
-            <!-- Ring Chart Card (Allocation Slicer Visual by Tag) -->
-            <div class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
-                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Allocation by Tag</h2>
-                <div class="ring-chart-container">
+            <!-- Ring Chart Card (Always visible, content changes) --><div id="chartCard" class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2" id="chartTitle">Allocation by Tag</h2>
+                <div class="ring-chart-container pt-4 pb-4"> <!-- ADDED vertical padding to push chart down -->
                     <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
                 </div>
             </div>
 
-            <!-- Key Financial Metrics Cards -->
-            <div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-4 lg:col-span-2">
+            <!-- Key Financial Metrics Cards (Hidden when Tag filter is active) --><div id="keyMetricsWrapper" class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-4 lg:col-span-2 transition-opacity duration-300">
                 <div id="metric-invested" class="metric-card bg-white p-5 border-l-4 border-indigo-500">
                     <p class="text-sm font-medium text-gray-500">Total Invested</p>
                     <p class="text-2xl font-bold text-gray-800 mt-1" id="totalInvested">Loading...</p>
@@ -94,9 +92,7 @@
             </div>
         </div>
 
-        <!-- Detailed Fund Table -->
-        <div class="bg-white p-6 rounded-xl metric-card shadow-lg" id="fundDetailsCard">
-            <!-- Content will be injected by script -->
+        <!-- Detailed Fund Table (Always spans full width but is visually alongside chart when Tag is filtered) --><div class="bg-white p-6 rounded-xl metric-card shadow-lg" id="fundDetailsCard">
             <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
             <div class="p-8 text-center text-lg text-indigo-500">Loading portfolio data from Google Sheets...</div>
         </div>
@@ -104,16 +100,12 @@
 
     <script>
         // --- DATA SOURCE CONFIGURATION ---
-        // This URL points to a public Google Sheet CSV export.
+        // FIX: Changed /sheets/ to /spreadsheets/ to resolve common 'Failed to fetch' error in hosted environments.
         const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5ozzUpj35PGfBGKsdwKhviBFogErmsLxcKaLWJ_rbxDcPLI1LPUxp6EwpLjEQWyIbvMs2RT8VI6MH/pub?gid=1275914219&single=true&output=csv'; 
         
-        // Data variables
         let fundData = []; 
         let allocationChart = null;
-        let tableSort = {
-            prop: 'returnPct',
-            order: 'desc'
-        };
+        let tableSort = { prop: 'returnPct', order: 'desc' };
 
         // --- FILTER STATE ---
         let currentOwner = 'All';
@@ -124,11 +116,8 @@
 
         const isFileProtocol = () => window.location.protocol === 'file:';
 
-        // Currency format (Invested, Value, Return) - whole numbers (Indian Rupee style)
         const formatCurrency = (amount) => {
-            // Handle NaN/null case gracefully
             if (isNaN(amount) || amount === null) return '₹ 0';
-
             return new Intl.NumberFormat('en-IN', { 
                 style: 'currency', 
                 currency: 'INR', 
@@ -137,7 +126,6 @@
             }).format(amount);
         };
 
-        // Unit format - 2 decimal places
         const formatUnits = (amount) => {
              if (isNaN(amount) || amount === null) return '0.00';
              return new Intl.NumberFormat('en-US', { 
@@ -146,7 +134,6 @@
             }).format(amount);
         }
 
-        // Percentage format - 1 decimal place (Input is decimal, e.g., 0.15)
         const formatPercent = (value) => {
             if (isNaN(value) || value === null) return '0.0%';
             return (value * 100).toFixed(1) + '%';
@@ -154,7 +141,6 @@
 
         // --- CORE CSV PARSING FUNCTION ---
         
-        // Robust function to split a CSV line while correctly handling fields enclosed in double quotes (e.g., when a scheme name contains a comma).
         function splitCSVLine(line) {
             const results = [];
             let currentField = '';
@@ -166,14 +152,12 @@
                 if (char === '"') {
                     inQuote = !inQuote;
                 } else if (char === ',' && !inQuote) {
-                    // Delimiter found outside quotes: push the field and reset
                     results.push(currentField.trim().replace(/['"]+/g, ''));
                     currentField = '';
                 } else {
                     currentField += char;
                 }
             }
-            // Push the last field
             results.push(currentField.trim().replace(/['"]+/g, ''));
             return results;
         }
@@ -184,27 +168,16 @@
             if (lines.length === 0) return [];
 
             const [headerLine, ...dataLines] = lines;
-            
-            // Clean and trim headers, and create a lookup map
             const headers = headerLine.split(',').map(h => h.trim().replace(/['"]+/g, ''));
             
-            // Map sheet column headers to internal JS properties
             const propMap = {
-                'Owner': 'owner',
-                'Tag': 'tag',
-                'Scheme Name': 'schemeName',
-                'Units': 'units',
-                'Invested': 'invested',
-                'Value': 'value',
-                'Return': 'returns', 
-                'Return %': 'returnPct',
-                'XIRR': 'xirr',
+                'Owner': 'owner', 'Tag': 'tag', 'Scheme Name': 'schemeName', 'Units': 'units',
+                'Invested': 'invested', 'Value': 'value', 'Return': 'returns', 'Return %': 'returnPct', 'XIRR': 'xirr',
             };
             
             const standardNumericProps = ['units', 'invested', 'value', 'returns'];
             const percentageProps = ['returnPct', 'xirr'];
 
-            // Create a lookup array based on the order of the actual CSV headers
             const headerToProp = headers.map(h => {
                 const propKey = Object.keys(propMap).find(key => key.toLowerCase() === h.toLowerCase());
                 return propMap[propKey] || null;
@@ -212,13 +185,10 @@
 
             const schemeNameIndex = headers.findIndex(h => h.toLowerCase() === 'scheme name');
             
-            // Parse data rows
             return dataLines.map(line => {
-                // Use the robust splitter to correctly handle commas inside fields
                 const values = splitCSVLine(line); 
                 const fund = {};
 
-                // Skip rows without a scheme name, often aggregate rows or blanks
                 if (schemeNameIndex === -1 || !values[schemeNameIndex] || values[schemeNameIndex].trim() === '') {
                     return null;
                 }
@@ -227,34 +197,27 @@
                     const prop = headerToProp[index];
                     if (!prop) return;
 
-                    // 1. Clean value: remove currency symbols and trim spaces
                     let cleanedValue = rawValue.replace(/[$,₹]/g, '').trim();
                     
                     if (standardNumericProps.includes(prop) || percentageProps.includes(prop)) {
-                         // 2. Aggressively strip commas (thousands separators) and percent signs for numeric parsing
                          cleanedValue = cleanedValue.replace(/,/g, '').replace(/%/g, '');
                     }
                     
-                    // Default to 0 if parsing fails
                     const parsedValue = parseFloat(cleanedValue) || 0;
                     
                     if (standardNumericProps.includes(prop)) {
-                        // Store standard numbers (Units, Invested, Value, Returns)
                         fund[prop] = parsedValue;
                     } else if (percentageProps.includes(prop)) {
-                        // Percentages (e.g., 15.0 in sheet) are divided by 100 for internal decimal math
                         fund[prop] = parsedValue / 100;
                     } else {
-                        // Text properties (Owner, Tag, Scheme Name)
                         fund[prop] = cleanedValue;
                     }
                 });
 
-                // Ensure essential fields are present
                 if (!fund.owner || !fund.tag || !fund.schemeName) return null;
                 
                 return fund;
-            }).filter(f => f); // Remove any null entries
+            }).filter(f => f); 
         }
 
         // --- FILTERING & RENDERING COORDINATION ---
@@ -272,6 +235,10 @@
 
             return filtered;
         }
+        
+        function getFilteredDataForMetrics(owner) {
+            return getFilteredData(owner, 'All');
+        }
 
         function updateDashboard() {
             // Read current filter state
@@ -279,15 +246,46 @@
             currentTag = document.getElementById('tagFilter') ? document.getElementById('tagFilter').value : 'All';
             
             // 1. Data for Metrics and Chart (only filtered by Owner)
-            const metricsChartData = getFilteredData(currentOwner, 'All');
+            const metricsChartData = getFilteredDataForMetrics(currentOwner);
             
-            // 2. Data for Table (filtered by Owner and Tag)
+            // 2. Data for Table (filtered by Owner and Tag, and searched)
             let tableData = getFilteredData(currentOwner, currentTag);
             tableData = filterSearch(tableData);
 
-            // Update all visual components
+            // 3. Dynamic Layout Switch
+            const mainGrid = document.getElementById('mainContentGrid');
+            const metricsWrapper = document.getElementById('keyMetricsWrapper');
+            const chartCard = document.getElementById('chartCard');
+            const fundDetailsCard = document.getElementById('fundDetailsCard');
+
+
+            if (currentTag !== 'All') {
+                // Detailed Tag View (Chart on Left, Table on Right)
+                metricsWrapper.classList.add('hidden', 'opacity-0');
+                mainGrid.classList.remove('lg:grid-cols-3');
+                mainGrid.classList.add('lg:grid-cols-2');
+                
+                // Move table visually next to chart (adjust CSS class for two columns)
+                chartCard.classList.remove('lg:col-span-1');
+                chartCard.classList.add('lg:col-span-1');
+                fundDetailsCard.classList.remove('lg:col-span-3'); // Reset existing
+                fundDetailsCard.classList.add('lg:col-span-1', 'order-2'); // Makes table appear right of chart
+                
+            } else {
+                // Overview View (Chart + Metrics)
+                metricsWrapper.classList.remove('hidden', 'opacity-0');
+                mainGrid.classList.remove('lg:grid-cols-2');
+                mainGrid.classList.add('lg:grid-cols-3');
+                
+                chartCard.classList.remove('lg:col-span-2');
+                chartCard.classList.add('lg:col-span-1');
+                fundDetailsCard.classList.remove('lg:col-span-1', 'order-2'); // Reset layout
+            }
+
+
+            // 4. Update all visual components
             calculateOverallMetrics(metricsChartData);
-            createRingChart(metricsChartData);
+            createRingChart(metricsChartData); // Pass the owner-filtered data
             applySort(tableData);
         }
 
@@ -323,7 +321,6 @@
             const currentValue = data.reduce((sum, fund) => sum + fund.value, 0);
             const totalReturn = currentValue - totalInvested;
             
-            // Simple weighted average XIRR (approximation, as true XIRR requires transaction dates)
             const overallXIRR = (data.reduce((sum, fund) => sum + fund.xirr * fund.invested, 0) / totalInvested) || 0; 
 
             document.getElementById('totalInvested').textContent = formatCurrency(totalInvested);
@@ -331,7 +328,6 @@
             document.getElementById('totalReturn').textContent = formatCurrency(totalReturn);
             document.getElementById('overallXirr').textContent = formatPercent(overallXIRR);
 
-            // Update border color based on Total Return performance
             const returnElement = document.getElementById('metric-return');
             returnElement.classList.remove('border-yellow-500', 'border-green-500', 'border-red-500');
             
@@ -346,61 +342,131 @@
 
         function createRingChart(data) {
             const ctx = document.getElementById('allocationChart').getContext('2d');
+            const chartTitle = document.getElementById('chartTitle');
             
             if (allocationChart) {
                 allocationChart.destroy();
             }
 
-            // Group value by Tag
-            const tagAllocation = data.reduce((acc, fund) => {
-                const tag = fund.tag;
-                acc[tag] = (acc[tag] || 0) + fund.value;
-                return acc;
-            }, {});
+            let chartDataRaw = [];
+            let chartLabels = [];
+            let chartInvested = [];
+            let chartValues = [];
+            let totalChartValue = 0;
+            let chartMode = 'Tag';
 
-            const chartRelevantData = Object.entries(tagAllocation).filter(([, value]) => value > 0);
-            const totalValue = chartRelevantData.reduce((sum, [, value]) => sum + value, 0);
+            if (currentTag === 'All') {
+                // Mode 1: Group by Tag (Metrics View)
+                chartMode = 'Tag';
+                chartTitle.textContent = 'Allocation by Tag (Filtered by Owner)';
+                const tagAllocation = data.reduce((acc, fund) => {
+                    const tag = fund.tag;
+                    acc[tag] = {
+                        value: (acc[tag]?.value || 0) + fund.value,
+                        invested: (acc[tag]?.invested || 0) + fund.invested
+                    };
+                    return acc;
+                }, {});
+                
+                chartDataRaw = Object.entries(tagAllocation).filter(([, d]) => d.value > 0);
+                chartLabels = chartDataRaw.map(([tag]) => tag);
+                chartValues = chartDataRaw.map(([, d]) => d.value);
+                chartInvested = chartDataRaw.map(([, d]) => d.invested);
 
-            // Simple, predictable color generation
+            } else {
+                // Mode 2: Group by Scheme Name (Detail View)
+                chartMode = 'Scheme';
+                chartTitle.textContent = `Allocation by Scheme Name (${currentTag})`;
+                // Filter by owner and the *selected tag*
+                const filteredDataForScheme = fundData.filter(f => f.owner === currentOwner && f.tag === currentTag);
+
+                const schemeAllocation = filteredDataForScheme.reduce((acc, fund) => {
+                    const scheme = fund.schemeName;
+                    acc[scheme] = {
+                        value: (acc[scheme]?.value || 0) + fund.value,
+                        invested: (acc[scheme]?.invested || 0) + fund.invested
+                    };
+                    return acc;
+                }, {});
+
+                chartDataRaw = Object.entries(schemeAllocation).filter(([, d]) => d.value > 0);
+                chartLabels = chartDataRaw.map(([scheme]) => scheme);
+                chartValues = chartDataRaw.map(([, d]) => d.value);
+                chartInvested = chartDataRaw.map(([, d]) => d.invested);
+            }
+
+            totalChartValue = chartValues.reduce((sum, val) => sum + val, 0);
+
             const generateColors = (count) => {
                 const colors = [];
                 for (let i = 0; i < count; i++) {
-                    colors.push(`hsl(${(i * 50 + 120) % 360}, 70%, 50%)`); // Start from a more blue-green shade
+                    colors.push(`hsl(${(i * 50 + 120) % 360}, 70%, 50%)`);
                 }
                 return colors;
             };
+            
+            const generatedColors = generateColors(chartLabels.length);
 
-            const chartData = {
-                labels: chartRelevantData.map(([tag]) => tag),
-                datasets: [{
-                    data: chartRelevantData.map(([, value]) => value),
-                    backgroundColor: generateColors(chartRelevantData.length),
-                    hoverOffset: 8,
-                }]
-            };
-
+            const datasets = [{
+                data: chartValues,
+                backgroundColor: generatedColors, 
+                hoverOffset: 8,
+                investedValues: chartInvested, 
+                values: chartValues
+            }];
+            
             allocationChart = new Chart(ctx, {
                 type: 'doughnut',
-                data: chartData,
+                data: { labels: chartLabels, datasets: datasets },
+                plugins: [ChartDataLabels], 
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    cutout: '75%', // Ring chart style
+                    cutout: '75%', 
+                    layout: {
+                        padding: 50 
+                    },
                     plugins: {
                         legend: {
-                            position: 'right',
-                            labels: { font: { family: 'Inter', size: 11 } }
+                            display: false 
                         },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    let label = context.label || '';
-                                    if (label) { label += ': '; }
+                                    const label = context.label || '';
                                     const value = context.parsed;
-                                    const percentage = totalValue > 0 ? (value / totalValue) * 100 : 0;
-                                    label += formatCurrency(value) + ' (' + percentage.toFixed(1) + '%)';
-                                    return label;
+                                    const invested = context.dataset.investedValues[context.dataIndex];
+                                    const percentage = totalChartValue > 0 ? (value / totalChartValue) * 100 : 0;
+                                    
+                                    return [
+                                        `${label}: ${formatPercent(percentage / 100)}`, 
+                                        `Value: ${formatCurrency(value)}`,           
+                                        `Invested: ${formatCurrency(invested)}`       
+                                    ];
                                 }
+                            }
+                        },
+                        datalabels: {
+                            color: 'black', 
+                            textAlign: 'center',
+                            anchor: 'end', 
+                            align: 'end',  
+                            offset: 10,    
+                            font: {
+                                weight: 'bold',
+                                size: 12,
+                            },
+                            formatter: (value, context) => {
+                                const label = context.chart.data.labels[context.dataIndex];
+                                const percentage = totalChartValue > 0 ? (value / totalChartValue) * 100 : 0;
+                                
+                                return `${label}\n${percentage.toFixed(1)}%`;
+                            },
+                            display: function(context) {
+                                const dataset = context.dataset;
+                                const dataItem = dataset.data[context.dataIndex];
+                                const total = dataset.data.reduce((a, b) => a + b, 0);
+                                return total > 0 && (dataItem / total) > 0.05; 
                             }
                         }
                     }
@@ -447,8 +513,8 @@
         function applySort(data) {
             
             data.sort((a, b) => {
-                const aVal = a[tableSort.prop];
-                const bVal = b[tableSort.prop];
+                const aVal = a[getPropName(tableSort.prop)];
+                const bVal = b[getPropName(tableSort.prop)];
                 
                 let comparison = 0;
                 if (aVal > bVal) comparison = 1;
@@ -458,13 +524,15 @@
                 return tableSort.order === 'desc' ? comparison * -1 : comparison;
             });
 
-            // Update column header icons (optional: not fully implemented in provided CSS but good practice)
+            // Highlight sorted column header
             const headers = document.querySelectorAll('#fundDetailsCard th');
             headers.forEach(header => {
-                const headerProp = getPropName(header.getAttribute('data-sort'));
-                header.classList.remove('font-extrabold', 'text-indigo-600');
+                const headerProp = header.getAttribute('data-sort');
+                header.classList.remove('font-extrabold', 'text-indigo-600', 'text-gray-900');
                 if (headerProp === tableSort.prop) {
                     header.classList.add('font-extrabold', 'text-indigo-600');
+                } else {
+                    header.classList.add('text-gray-500');
                 }
             });
 
@@ -488,14 +556,12 @@
             const newProp = getPropName(property);
             
             if (tableSort.prop === newProp) {
-                // Toggle order if clicking the same column
                 tableSort.order = tableSort.order === 'asc' ? 'desc' : 'asc';
             } else {
-                // Default to descending for a new column (highest is usually better)
                 tableSort.prop = newProp;
                 tableSort.order = 'desc'; 
             }
-             
+              
             updateDashboard();
         }
         
@@ -509,15 +575,14 @@
             return `
                 <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
                 <div class="mb-4 flex flex-col sm:flex-row gap-3">
-                    <select id="tagFilter" class="filter-select w-full sm:w-auto min-w-[150px]">
+                    <select id="tagFilter" class="filter-select w-full sm:w-auto min-w-[150px]" onchange="updateDashboard()">
                         <option value="All">Filter by Tag</option>
                     </select>
                     <input type="text" id="schemeSearch" placeholder="Search Scheme Name..." 
                            class="p-3 border border-gray-300 rounded-lg w-full sm:w-1/3 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
                            oninput="updateDashboard()"
                            >
-                    <!-- Sort functionality is now handled by clicking table headers -->
-                </div>
+                    <!-- No sort dropdown needed, sorting is via table headers --></div>
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
@@ -527,13 +592,12 @@
                                 <th scope="col" data-sort="invested" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('invested')">Invested</th>
                                 <th scope="col" data-sort="value" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('value')">Value</th>
                                 <th scope="col" data-sort="return" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('return')">Return</th>
-                                <th scope="col" data-sort="return_pct" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer font-extrabold text-indigo-600" onclick="sortTable('return_pct')">Return %</th>
+                                <th scope="col" data-sort="return_pct" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('return_pct')">Return %</th>
                                 <th scope="col" data-sort="xirr" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('xirr')">XIRR</th>
                             </tr>
                         </thead>
                         <tbody id="fundTableBody" class="bg-white divide-y divide-gray-200">
-                            <!-- Data rows will be injected here -->
-                        </tbody>
+                            <!-- Data rows will be injected here --></tbody>
                     </table>
                 </div>
             `;
@@ -541,18 +605,8 @@
 
         const setupListeners = () => {
             const ownerFilter = document.getElementById('ownerFilter');
-            const fundDetailsCard = document.getElementById('fundDetailsCard');
-            
             if (ownerFilter) ownerFilter.addEventListener('change', updateDashboard);
-
-            // Need to set up listeners for tag filter and search after the table structure is injected
-            // Use event delegation for dynamic elements
-            fundDetailsCard.addEventListener('change', (e) => {
-                if (e.target.id === 'tagFilter') {
-                    updateDashboard();
-                }
-            });
-            // Scheme search input handler is now inline in getOriginalTableStructure
+            // Tag filter and search handlers are now inline in getOriginalTableStructure
         };
         
         async function fetchAndProcessData() {
@@ -560,11 +614,6 @@
 
             if (isFileProtocol()) {
                  document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('Data Fetch Error: The browser prevents data fetching from external URLs when the HTML file is opened directly (using `file://`). Please run this file using a local web server.');
-                 // Default to 0 values if fetch fails
-                 document.getElementById('totalInvested').textContent = formatCurrency(0);
-                 document.getElementById('currentValue').textContent = formatCurrency(0);
-                 document.getElementById('totalReturn').textContent = formatCurrency(0);
-                 document.getElementById('overallXirr').textContent = formatPercent(0);
                  return;
             }
             
@@ -580,23 +629,17 @@
                     return;
                 }
 
-                // Inject the table structure and its filtering/sorting controls
                 document.getElementById('fundDetailsCard').innerHTML = getOriginalTableStructure();
                 
-                // Set up event listeners for newly injected elements
                 setupListeners();
+                populateFilters(); // Needs to run after listeners are set up for dynamic elements
                 
-                // Populate the owner and tag filters
-                populateFilters();
-                
-                // Calculate metrics and render the table/chart
                 updateDashboard();
 
             } catch (error) {
                 console.error('Error fetching or processing data:', error);
                 document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('Failed to load data. Please confirm the SHEET_URL is correct and published publicly.');
                 
-                // Ensure metrics show 0 if data load fails
                 document.getElementById('totalInvested').textContent = formatCurrency(0);
                 document.getElementById('currentValue').textContent = formatCurrency(0);
                 document.getElementById('totalReturn').textContent = formatCurrency(0);
@@ -606,12 +649,7 @@
             }
         }
 
-        // Start initialization when the document is fully loaded
         document.addEventListener('DOMContentLoaded', fetchAndProcessData);
     </script>
 </body>
 </html>
-
-
-
- 
