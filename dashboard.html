@@ -48,8 +48,7 @@
         }
     </style>
     <!-- Load Chart.js for the ring chart --><script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
-    <!-- Load Chart.js Data Labels Plugin --><script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
-</head>
+    <!-- REMOVED: Data Labels Plugin (Using Legend for stability) --></head>
 <body class="p-4 md:p-8">
 
     <div class="max-w-7xl mx-auto">
@@ -67,7 +66,7 @@
 
             <!-- Ring Chart Card (Always visible, content changes) --><div id="chartCard" class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
                 <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2" id="chartTitle">Allocation by Tag</h2>
-                <div class="ring-chart-container"> <!-- REVERTED: Removed inline vertical padding (pt-8 pb-8) -->
+                <div class="ring-chart-container">
                     <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
                 </div>
             </div>
@@ -352,11 +351,9 @@
             let chartInvested = [];
             let chartValues = [];
             let totalChartValue = 0;
-            let chartMode = 'Tag';
 
             if (currentTag === 'All') {
                 // Mode 1: Group by Tag (Metrics View)
-                chartMode = 'Tag';
                 chartTitle.textContent = 'Allocation by Tag (Filtered by Owner)';
                 const tagAllocation = data.reduce((acc, fund) => {
                     const tag = fund.tag;
@@ -374,9 +371,7 @@
 
             } else {
                 // Mode 2: Group by Scheme Name (Detail View)
-                chartMode = 'Scheme';
                 chartTitle.textContent = `Allocation by Scheme Name (${currentTag})`;
-                // Filter by owner and the *selected tag*
                 const filteredDataForScheme = fundData.filter(f => f.owner === currentOwner && f.tag === currentTag);
 
                 const schemeAllocation = filteredDataForScheme.reduce((acc, fund) => {
@@ -417,17 +412,44 @@
             allocationChart = new Chart(ctx, {
                 type: 'doughnut',
                 data: { labels: chartLabels, datasets: datasets },
-                plugins: [ChartDataLabels], 
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     cutout: '75%', 
                     layout: {
-                        padding: 50 
+                        padding: 10 // Small padding for internal canvas area
                     },
                     plugins: {
                         legend: {
-                            display: false 
+                            display: true, // RE-ENABLED LEGEND
+                            position: 'right',
+                            labels: {
+                                font: {
+                                    family: 'Inter',
+                                    size: 11
+                                },
+                                // ENHANCED LEGEND CALLBACK: Shows label name and percentage
+                                generateLabels: function(chart) {
+                                    const data = chart.data;
+                                    if (data.labels.length && data.datasets.length) {
+                                        return data.labels.map((label, i) => {
+                                            const total = data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                            const value = data.datasets[0].data[i];
+                                            const percentage = total > 0 ? (value / total) * 100 : 0;
+                                            
+                                            return {
+                                                text: `${label} (${percentage.toFixed(1)}%)`,
+                                                fillStyle: data.datasets[0].backgroundColor[i],
+                                                strokeStyle: data.datasets[0].borderColor,
+                                                lineWidth: data.datasets[0].borderWidth,
+                                                hidden: data.datasets[0].hidden,
+                                                index: i
+                                            };
+                                        });
+                                    }
+                                    return [];
+                                }
+                            }
                         },
                         tooltip: {
                             callbacks: {
@@ -443,29 +465,6 @@
                                         `Invested: ${formatCurrency(invested)}`       
                                     ];
                                 }
-                            }
-                        },
-                        datalabels: {
-                            color: 'black', 
-                            textAlign: 'center',
-                            anchor: 'end', 
-                            align: 'end',  
-                            offset: 10,    
-                            font: {
-                                weight: 'bold',
-                                size: 12,
-                            },
-                            formatter: (value, context) => {
-                                const label = context.chart.data.labels[context.dataIndex];
-                                const percentage = totalChartValue > 0 ? (value / totalChartValue) * 100 : 0;
-                                
-                                return `${label}\n${percentage.toFixed(1)}%`;
-                            },
-                            display: function(context) {
-                                const dataset = context.dataset;
-                                const dataItem = dataset.data[context.dataIndex];
-                                const total = dataset.data.reduce((a, b) => a + b, 0);
-                                return total > 0 && (dataItem / total) > 0.05; 
                             }
                         }
                     }
