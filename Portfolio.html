@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Investment Dashboard</title>
+    <title>Investment Dashboard V2</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Use Inter font -->
@@ -35,6 +35,9 @@
             width: 100%;
             height: 100%;
         }
+        .filter-select {
+            @apply p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm;
+        }
     </style>
     <!-- Load Chart.js for the ring chart -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
@@ -44,12 +47,22 @@
     <div class="max-w-7xl mx-auto">
         <h1 class="text-3xl font-bold text-gray-800 mb-6">Portfolio Overview</h1>
 
+        <!-- Owner Filter (Global Control) -->
+        <div class="mb-6 bg-white p-4 rounded-xl shadow-md flex flex-col sm:flex-row items-center gap-4">
+            <label for="ownerFilter" class="text-sm font-semibold text-gray-700 whitespace-nowrap">Filter by Owner:</label>
+            <select id="ownerFilter" class="filter-select w-full sm:w-auto min-w-[150px]">
+                <option value="All">All Owners</option>
+                <!-- Owner options populated by JS -->
+            </select>
+            <div id="loadingStatus" class="text-sm text-indigo-500 ml-auto hidden">Loading...</div>
+        </div>
+
         <!-- Top Metrics Row (Ring Chart and Key Financials) -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
 
-            <!-- Ring Chart Card (Allocation Slicer Visual) -->
+            <!-- Ring Chart Card (Allocation Slicer Visual by Tag) -->
             <div class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
-                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Allocation by Value</h2>
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Allocation by Tag</h2>
                 <div class="ring-chart-container">
                     <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
                 </div>
@@ -78,7 +91,7 @@
 
         <!-- Detailed Fund Table -->
         <div class="bg-white p-6 rounded-xl metric-card shadow-lg" id="fundDetailsCard">
-            <!-- Content will be replaced by loading message, then restored by script -->
+            <!-- Content will be injected by script -->
             <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
             <div class="p-8 text-center text-lg text-indigo-500">Loading portfolio data from Google Sheets...</div>
         </div>
@@ -86,25 +99,41 @@
 
     <script>
         // --- DATA SOURCE CONFIGURATION ---
-        // Your published Google Sheet CSV URL (already set).
-        const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5ozzUpj35PGfBGKsdwKhviBFogErmsLxcKaLWJ_rbxDcPLI1LPUxp6EwpLjEQWyIbvMs2RT8VI6MH/pub?gid=726228322&single=true&output=csv'; 
+        const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5ozzUpj35PGfBGKsdwKhviBFogErmsLxcKaLWJ_rbxDcPLI1LPUxp6EwpLjEQWyIbvMs2RT8VI6MH/pub?gid=1275914219&single=true&output=csv'; 
         
         // Data variables
         let fundData = []; 
-        let currentData = [];
         let allocationChart = null;
 
+        // --- FILTER STATE ---
+        let currentOwner = 'All';
+        let currentTag = 'All';
 
-        // --- UTILITY FUNCTIONS ---
-        const isFileProtocol = () => window.location.protocol === 'file:';
 
+        // --- UTILITY FUNCTIONS (Formatting) ---
+
+        // Currency format (Invested, Value, Return) - whole numbers
         const formatCurrency = (amount) => {
-            // Using 'en-IN' for Indian Rupee format, assuming data is in INR
-            return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount);
+            return new Intl.NumberFormat('en-IN', { 
+                style: 'currency', 
+                currency: 'INR', 
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(amount);
         };
+
+        // Unit format - 2 decimal places
+        const formatUnits = (amount) => {
+             return new Intl.NumberFormat('en-US', { 
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(amount);
+        }
+
+        // Percentage format - 1 decimal place
         const formatPercent = (value) => {
-            // NOTE: 'value' here is already a decimal (e.g., 0.15) after division in parseCSV
-            return (value * 100).toFixed(2) + '%';
+            // value is already a decimal (e.g., 0.15)
+            return (value * 100).toFixed(1) + '%';
         };
 
         // --- CSV PARSING FUNCTION ---
@@ -113,13 +142,15 @@
             const headers = headerLine.split(',').map(h => h.trim().replace(/['"]+/g, ''));
 
             const propMap = {
+                'Owner': 'owner',
+                'Tag': 'tag',
                 'Scheme Name': 'schemeName',
-                'Symbol': 'symbol',
+                'Units': 'units',
                 'Invested': 'invested',
                 'Value': 'value',
+                'Return': 'returns',
                 'Return %': 'returnPct',
                 'XIRR': 'xirr',
-                'Net Units': 'netUnits',
             };
 
             return dataLines.map(line => {
@@ -138,128 +169,91 @@
                     const rawValue = values[index] ? values[index].trim().replace(/['"]+/g, '') : '';
                     const parsedValue = parseFloat(rawValue) || 0;
                     
-                    if (['invested', 'value', 'netUnits'].includes(prop)) {
-                        // Regular currency/unit numbers
+                    if (['units', 'invested', 'value', 'returns'].includes(prop)) {
+                        // Regular numbers (will be formatted later)
                         fund[prop] = parsedValue;
                     } else if (['returnPct', 'xirr'].includes(prop)) {
-                        // FIX: Percentage numbers (e.g., 15.0 in the sheet) are divided by 100 here 
-                        // to convert them to decimal (0.15) for correct application math.
+                        // Percentages (e.g., 15.0 in sheet) are divided by 100 for internal decimal math
                         fund[prop] = parsedValue / 100;
                     } else {
                         fund[prop] = rawValue;
                     }
                 });
-
-                // Calculate 'returns' client-side based on fetched 'value' and 'invested'
-                fund.returns = fund.value - fund.invested;
                 
                 return fund;
             }).filter(f => f); // Filter out null (invalid) rows
         }
 
-        // --- DATA FETCHING ---
-        async function fetchAndProcessData() {
-            // Check for file protocol error locally
-            if (isFileProtocol()) {
-                 document.getElementById('fundDetailsCard').innerHTML = getErrorMessage(
-                    'Local file access error! Please run this file using a **local web server** (e.g., using Python\'s `http.server` or VS Code\'s Live Server extension) instead of opening the file directly from your hard drive.'
-                );
-                return;
-            }
+        // --- FILTERING & RENDERING COORDINATION ---
+
+        function getFilteredData(owner, tag) {
+            let filtered = fundData;
             
-            const dataUrl = SHEET_URL;
+            if (owner !== 'All') {
+                filtered = filtered.filter(f => f.owner === owner);
+            }
 
-            try {
-                const fundDetailsDiv = document.getElementById('fundDetailsCard');
+            // Only apply tag filter if a tag is selected AND the tag filter element exists (i.e., table structure is restored)
+            if (tag !== 'All' && document.getElementById('tagFilter')) {
+                filtered = filtered.filter(f => f.tag === tag);
+            }
 
-                const response = await fetch(dataUrl);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const csvText = await response.text();
-                
-                // Parse the fetched data
-                const parsedData = parseCSV(csvText);
+            return filtered;
+        }
 
-                if (parsedData.length === 0) {
-                    fundDetailsDiv.innerHTML = getErrorMessage('No data found or failed to parse. Check your Google Sheet publication URL and data format.');
-                    return;
-                }
+        function updateDashboard() {
+            // 1. Get Filter State
+            currentOwner = document.getElementById('ownerFilter').value;
+            currentTag = document.getElementById('tagFilter') ? document.getElementById('tagFilter').value : 'All';
+            
+            // 2. Filter data for Metrics/Chart (filtered only by Owner)
+            const metricsChartData = getFilteredData(currentOwner, 'All');
+            
+            // 3. Filter data for Table (filtered by Owner AND Tag)
+            const tableData = getFilteredData(currentOwner, currentTag);
 
-                // Update global data stores
-                fundData = parsedData;
-                currentData = [...fundData];
+            // 4. Render Metrics, Chart, and Table
+            calculateOverallMetrics(metricsChartData);
+            createRingChart(metricsChartData);
+            applySort(tableData); // Apply sort and then render the table
+        }
 
-                // Restore original table structure before rendering
-                fundDetailsDiv.innerHTML = getOriginalTableStructure();
-                
-                // Must re-attach listeners now that the HTML elements are restored
-                setupListeners();
 
-                // Initial render
-                calculateOverallMetrics(fundData);
-                createRingChart(fundData);
-                applySort(); // Apply default sort
+        // --- DATA BINDING AND VISUALIZATION ---
 
-                
-            } catch (error) {
-                console.error('Error fetching data:', error);
-                document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('Failed to load data. Please check console for errors or confirm your <code class="bg-gray-200 p-1 rounded text-sm">SHEET_URL</code> is correct and published publicly.');
-                
-                // Clear metric cards on error
-                document.getElementById('totalInvested').textContent = '$0.00';
-                document.getElementById('currentValue').textContent = '$0.00';
-                document.getElementById('totalReturn').textContent = '$0.00';
-                document.getElementById('overallXirr').textContent = '0.00%';
+        function populateFilters() {
+            const uniqueOwners = [...new Set(fundData.map(f => f.owner))].sort();
+            const ownerFilter = document.getElementById('ownerFilter');
+            
+            // Populate Owner Filter
+            ownerFilter.innerHTML = '<option value="All">All Owners</option>';
+            uniqueOwners.forEach(owner => {
+                ownerFilter.innerHTML += `<option value="${owner}">${owner}</option>`;
+            });
+            
+            // Populate Tag Filter (called when the table structure is injected)
+            populateTagFilter();
+        }
+
+        function populateTagFilter() {
+            const uniqueTags = [...new Set(fundData.map(f => f.tag))].sort();
+            const tagFilter = document.getElementById('tagFilter');
+
+            if (tagFilter) {
+                 tagFilter.innerHTML = '<option value="All">All Tags</option>';
+                 uniqueTags.forEach(tag => {
+                    tagFilter.innerHTML += `<option value="${tag}">${tag}</option>`;
+                 });
             }
         }
-
-        // Helper to get error message HTML
-        function getErrorMessage(message) {
-            return `<h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2><div class="p-8 text-center text-lg text-red-500">${message}</div>`;
-        }
-
-        // Helper to restore the table structure after displaying a loading message
-        function getOriginalTableStructure() {
-            return `
-                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
-                <div class="mb-4 flex flex-col sm:flex-row gap-3">
-                    <input type="text" id="schemeSearch" placeholder="Search Scheme Name..." class="p-2 border border-gray-300 rounded-lg w-full sm:w-1/3 focus:ring-indigo-500 focus:border-indigo-500">
-                    <select id="sortSelect" class="p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                        <option value="return_desc">Sort by Return % (Highest)</option>
-                        <option value="value_desc">Sort by Current Value (Highest)</option>
-                        <option value="xirr_desc">Sort by XIRR (Highest)</option>
-                    </select>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('scheme')">Scheme Name</th>
-                                <th scope="col" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
-                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('invested')">Invested</th>
-                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('value')">Value</th>
-                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('return_pct')">Return %</th>
-                                <th scope="col" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('xirr')">XIRR</th>
-                            </tr>
-                        </thead>
-                        <tbody id="fundTableBody" class="bg-white divide-y divide-gray-200">
-                            <!-- Data rows will be injected here -->
-                        </tbody>
-                    </table>
-                </div>
-            `;
-        }
-
-
-        // --- DASHBOARD RENDERING ---
+        
         function calculateOverallMetrics(data) {
             const totalInvested = data.reduce((sum, fund) => sum + fund.invested, 0);
             const currentValue = data.reduce((sum, fund) => sum + fund.value, 0);
             const totalReturn = currentValue - totalInvested;
             
-            // Calculate a weighted average XIRR
-            const overallXirr = (data.reduce((sum, fund) => sum + fund.xirr * fund.invested, 0) / totalInvested) || 0.1185; 
+            // Calculate a weighted average XIRR (using investment value as weight)
+            const overallXirr = (data.reduce((sum, fund) => sum + fund.xirr * fund.invested, 0) / totalInvested) || 0; 
 
             document.getElementById('totalInvested').textContent = formatCurrency(totalInvested);
             document.getElementById('currentValue').textContent = formatCurrency(currentValue);
@@ -282,30 +276,33 @@
         function createRingChart(data) {
             const ctx = document.getElementById('allocationChart').getContext('2d');
             
-            // Destroy existing chart if it exists
             if (allocationChart) {
                 allocationChart.destroy();
             }
 
-            // Filter out funds with zero or negative value for the chart
-            const chartRelevantData = data.filter(f => f.value > 0);
+            // Aggregate data by Tag
+            const tagAllocation = data.reduce((acc, fund) => {
+                const tag = fund.tag;
+                acc[tag] = (acc[tag] || 0) + fund.value;
+                return acc;
+            }, {});
 
-            const totalValue = chartRelevantData.reduce((sum, fund) => sum + fund.value, 0);
+            const chartRelevantData = Object.entries(tagAllocation).filter(([, value]) => value > 0);
+            const totalValue = chartRelevantData.reduce((sum, [, value]) => sum + value, 0);
 
             // Generate unique colors based on data length
             const generateColors = (count) => {
                 const colors = [];
                 for (let i = 0; i < count; i++) {
-                    // Simple HSL generation for distinct, vibrant colors
                     colors.push(`hsl(${(i * 50) % 360}, 70%, 50%)`);
                 }
                 return colors;
             };
 
             const chartData = {
-                labels: chartRelevantData.map(f => f.schemeName),
+                labels: chartRelevantData.map(([tag]) => tag),
                 datasets: [{
-                    data: chartRelevantData.map(f => f.value),
+                    data: chartRelevantData.map(([, value]) => value),
                     backgroundColor: generateColors(chartRelevantData.length),
                     hoverOffset: 8,
                 }]
@@ -317,24 +314,17 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    cutout: '75%', // Creates the ring/donut chart effect
+                    cutout: '75%', 
                     plugins: {
                         legend: {
                             position: 'right',
-                            labels: {
-                                font: {
-                                    family: 'Inter',
-                                    size: 11
-                                }
-                            }
+                            labels: { font: { family: 'Inter', size: 11 } }
                         },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
                                     let label = context.label || '';
-                                    if (label) {
-                                        label += ': ';
-                                    }
+                                    if (label) { label += ': '; }
                                     const value = context.parsed;
                                     const percentage = totalValue > 0 ? (value / totalValue) * 100 : 0;
                                     label += formatCurrency(value) + ' (' + percentage.toFixed(1) + '%)';
@@ -349,24 +339,24 @@
 
         function renderTable(data) {
             const tbody = document.getElementById('fundTableBody');
-            if (!tbody) return; // Guard clause
+            if (!tbody) return; 
             tbody.innerHTML = '';
 
             if (data.length === 0) {
-                tbody.innerHTML = `<tr><td colspan='6' class='px-3 py-4 text-center text-sm text-gray-500'>No funds match the criteria.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan='8' class='px-3 py-4 text-center text-sm text-gray-500'>No funds match the selected criteria.</td></tr>`;
                 return;
             }
 
             data.forEach(fund => {
-                // Calculate return percentage for table coloring
                 const returnClass = fund.returns >= 0 ? 'text-green-600' : 'text-red-600';
                 const row = document.createElement('tr');
                 row.className = 'hover:bg-gray-100 transition duration-150 ease-in-out';
                 row.innerHTML = `
                     <td class='px-3 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>${fund.schemeName}</td>
-                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-500'>${fund.symbol}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-500 text-right'>${formatUnits(fund.units)}</td>
                     <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.invested)}</td>
                     <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.value)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.returns)}</td>
                     <td class='px-3 py-4 whitespace-nowrap text-sm font-semibold ${returnClass} text-right'>${formatPercent(fund.returnPct)}</td>
                     <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-700 text-right'>${formatPercent(fund.xirr)}</td>
                 `;
@@ -376,98 +366,82 @@
 
         // --- FILTERING & SORTING LOGIC ---
 
-        function filterData() {
-            const searchValue = document.getElementById('schemeSearch').value.toLowerCase();
-            
-            let filteredData = fundData.filter(fund => 
-                fund.schemeName.toLowerCase().includes(searchValue)
-            );
-            
-            currentData = filteredData;
-            applySort();
+        function filterSearch(data) {
+             const searchValue = document.getElementById('schemeSearch').value.toLowerCase();
+             return data.filter(fund => fund.schemeName.toLowerCase().includes(searchValue));
         }
 
-        function applySort() {
+        function applySort(data) {
+            let filteredAndSearchedData = filterSearch(data);
+
             const sortSelect = document.getElementById('sortSelect');
+            if (!sortSelect) return renderTable(filteredAndSearchedData);
+
             const sortKey = sortSelect.value;
-            let sortProp;
-            let sortOrder;
+            let [sortProp, sortOrder] = sortKey.includes('_') ? sortKey.split('_') : [sortKey, 'asc'];
 
-            // Split the sort key (e.g., 'return_desc')
-            if (sortKey.includes('_')) {
-                [sortProp, sortOrder] = sortKey.split('_');
-            } else {
-                sortProp = sortKey;
-                sortOrder = 'asc'; 
-            }
-
-            currentData.sort((a, b) => {
+            filteredAndSearchedData.sort((a, b) => {
                 const aVal = a[getPropName(sortProp)];
                 const bVal = b[getPropName(sortProp)];
                 
                 let comparison = 0;
-                if (aVal > bVal) {
-                    comparison = 1;
-                } else if (aVal < bVal) {
-                    comparison = -1;
-                }
+                if (aVal > bVal) comparison = 1;
+                else if (aVal < bVal) comparison = -1;
 
-                // Reverse comparison if descending order is requested
                 return sortOrder === 'desc' ? comparison * -1 : comparison;
             });
 
-            // Re-render all components
-            calculateOverallMetrics(currentData.length > 0 ? currentData : fundData);
-            createRingChart(currentData);
-            renderTable(currentData);
+            renderTable(filteredAndSearchedData);
         }
 
         function getPropName(key) {
             switch(key) {
                 case 'scheme': return 'schemeName';
+                case 'units': return 'units';
                 case 'invested': return 'invested';
                 case 'value': return 'value';
-                case 'return_pct': // Only check for returnPct
+                case 'return': return 'returns'; 
+                case 'return_pct': return 'returnPct';
                 case 'xirr': return 'xirr';
                 default: return key;
             }
         }
 
-        // Allows header click sorting, overriding the dropdown
+        // Allows header click sorting
         function sortTable(property) {
              const sortSelect = document.getElementById('sortSelect');
-             if (!sortSelect) return; // Guard clause
+             if (!sortSelect) return; 
+             
              let newSort = `${property}_desc`;
-            
+             
              if (sortSelect.value.startsWith(property)) {
-                 // Toggle sort order
                  newSort = sortSelect.value.endsWith('_desc') ? `${property}_asc` : `${property}_desc`;
              }
              
-             // Check if the property corresponds to an option in the dropdown before setting the value
              const optionExists = Array.from(sortSelect.options).some(option => option.value.startsWith(property));
              if (optionExists) {
                 sortSelect.value = newSort;
              }
 
-             applySort();
+             // We only need to call updateDashboard() to trigger the full filter/sort/render cycle
+             updateDashboard();
         }
         
-        // --- EVENT LISTENERS SETUP ---
-        const setupListeners = () => {
-            const schemeSearch = document.getElementById('schemeSearch');
-            const sortSelect = document.getElementById('sortSelect');
-            if (schemeSearch) schemeSearch.addEventListener('input', filterData);
-            if (sortSelect) sortSelect.addEventListener('change', applySort);
-        };
+        // --- DATA FETCHING & INITIALIZATION ---
+        
+        function getErrorMessage(message) {
+            return `<h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2><div class="p-8 text-center text-lg text-red-500">${message}</div>`;
+        }
 
-
-        // --- INITIALIZATION ---
-        document.addEventListener('DOMContentLoaded', () => {
-            // Start the asynchronous data fetching process
-            fetchAndProcessData(); 
-        });
-
-    </script>
-</body>
-</html>
+        function getOriginalTableStructure() {
+            // Updated structure to include Tag filter
+            return `
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
+                <div class="mb-4 flex flex-col sm:flex-row gap-3">
+                    <select id="tagFilter" class="filter-select w-full sm:w-auto min-w-[150px]">
+                        <option value="All">Filter by Tag</option>
+                    </select>
+                    <input type="text" id="schemeSearch" placeholder="Search Scheme Name..." class="p-3 border border-gray-300 rounded-lg w-full sm:w-1/3 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                    <select id="sortSelect" class="filter-select">
+                        <option value="return_desc">Sort by Return % (Highest)</option>
+              
