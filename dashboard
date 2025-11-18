@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Investment Dashboard V2</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        /* Custom styling for metric cards */
+        .metric-card {
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            transition: transform 0.3s ease;
+            border-radius: 0.75rem; /* rounded-xl equivalent */
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+        /* Styling for responsive chart container */
+        .ring-chart-container {
+            position: relative;
+            width: 100%;
+            /* 1:1 Aspect Ratio for responsiveness */
+            padding-bottom: 100%; 
+        }
+        .ring-chart-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .filter-select {
+            @apply p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-sm;
+        }
+        /* Style for the sortable column headers */
+        th.cursor-pointer:hover {
+            background-color: #f1f5f9; /* light blue-gray hover */
+        }
+    </style>
+    <!-- Load Chart.js for the ring chart -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Portfolio Overview</h1>
+
+        <!-- Owner Filter (Global Control) -->
+        <div class="mb-6 bg-white p-4 rounded-xl shadow-md flex flex-col sm:flex-row items-center gap-4">
+            <label for="ownerFilter" class="text-sm font-semibold text-gray-700 whitespace-nowrap">Filter by Owner:</label>
+            <select id="ownerFilter" class="filter-select w-full sm:w-auto min-w-[150px]">
+                <option value="All">All Owners</option>
+                <!-- Owner options populated by JS -->
+            </select>
+            <div id="loadingStatus" class="text-sm text-indigo-500 ml-auto hidden">Loading...</div>
+        </div>
+
+        <!-- Top Metrics Row (Ring Chart and Key Financials) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+
+            <!-- Ring Chart Card (Allocation Slicer Visual by Tag) -->
+            <div class="bg-white p-6 rounded-xl metric-card shadow-lg lg:col-span-1">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Allocation by Tag</h2>
+                <div class="ring-chart-container">
+                    <canvas id="allocationChart" class="ring-chart-canvas"></canvas>
+                </div>
+            </div>
+
+            <!-- Key Financial Metrics Cards -->
+            <div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-4 lg:col-span-2">
+                <div id="metric-invested" class="metric-card bg-white p-5 border-l-4 border-indigo-500">
+                    <p class="text-sm font-medium text-gray-500">Total Invested</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="totalInvested">Loading...</p>
+                </div>
+                <div id="metric-value" class="metric-card bg-white p-5 border-l-4 border-green-500">
+                    <p class="text-sm font-medium text-gray-500">Current Value</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="currentValue">Loading...</p>
+                </div>
+                <div id="metric-return" class="metric-card bg-white p-5 border-l-4 border-yellow-500">
+                    <p class="text-sm font-medium text-gray-500">Total Return</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="totalReturn">Loading...</p>
+                </div>
+                <div id="metric-xirr" class="metric-card bg-white p-5 border-l-4 border-red-500">
+                    <p class="text-sm font-medium text-gray-500">Overall XIRR</p>
+                    <p class="text-2xl font-bold text-gray-800 mt-1" id="overallXirr">Loading...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Fund Table -->
+        <div class="bg-white p-6 rounded-xl metric-card shadow-lg" id="fundDetailsCard">
+            <!-- Content will be injected by script -->
+            <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
+            <div class="p-8 text-center text-lg text-indigo-500">Loading portfolio data from Google Sheets...</div>
+        </div>
+    </div>
+
+    <script>
+        // --- DATA SOURCE CONFIGURATION ---
+        // This URL points to a public Google Sheet CSV export.
+        const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5ozzUpj35PGfBGKsdwKhviBFogErmsLxcKaLWJ_rbxDcPLI1LPUxp6EwpLjEQWyIbvMs2RT8VI6MH/pub?gid=1275914219&single=true&output=csv'; 
+        
+        // Data variables
+        let fundData = []; 
+        let allocationChart = null;
+        let tableSort = {
+            prop: 'returnPct',
+            order: 'desc'
+        };
+
+        // --- FILTER STATE ---
+        let currentOwner = 'All';
+        let currentTag = 'All';
+
+
+        // --- UTILITY FUNCTIONS (Formatting) ---
+
+        const isFileProtocol = () => window.location.protocol === 'file:';
+
+        // Currency format (Invested, Value, Return) - whole numbers (Indian Rupee style)
+        const formatCurrency = (amount) => {
+            // Handle NaN/null case gracefully
+            if (isNaN(amount) || amount === null) return '₹ 0';
+
+            return new Intl.NumberFormat('en-IN', { 
+                style: 'currency', 
+                currency: 'INR', 
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(amount);
+        };
+
+        // Unit format - 2 decimal places
+        const formatUnits = (amount) => {
+             if (isNaN(amount) || amount === null) return '0.00';
+             return new Intl.NumberFormat('en-US', { 
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(amount);
+        }
+
+        // Percentage format - 1 decimal place (Input is decimal, e.g., 0.15)
+        const formatPercent = (value) => {
+            if (isNaN(value) || value === null) return '0.0%';
+            return (value * 100).toFixed(1) + '%';
+        };
+
+        // --- CORE CSV PARSING FUNCTION ---
+        
+        // Robust function to split a CSV line while correctly handling fields enclosed in double quotes (e.g., when a scheme name contains a comma).
+        function splitCSVLine(line) {
+            const results = [];
+            let currentField = '';
+            let inQuote = false;
+
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+
+                if (char === '"') {
+                    inQuote = !inQuote;
+                } else if (char === ',' && !inQuote) {
+                    // Delimiter found outside quotes: push the field and reset
+                    results.push(currentField.trim().replace(/['"]+/g, ''));
+                    currentField = '';
+                } else {
+                    currentField += char;
+                }
+            }
+            // Push the last field
+            results.push(currentField.trim().replace(/['"]+/g, ''));
+            return results;
+        }
+
+
+        function parseCSV(csvText) {
+            const lines = csvText.trim().split('\n').filter(line => line.trim() !== '');
+            if (lines.length === 0) return [];
+
+            const [headerLine, ...dataLines] = lines;
+            
+            // Clean and trim headers, and create a lookup map
+            const headers = headerLine.split(',').map(h => h.trim().replace(/['"]+/g, ''));
+            
+            // Map sheet column headers to internal JS properties
+            const propMap = {
+                'Owner': 'owner',
+                'Tag': 'tag',
+                'Scheme Name': 'schemeName',
+                'Units': 'units',
+                'Invested': 'invested',
+                'Value': 'value',
+                'Return': 'returns', 
+                'Return %': 'returnPct',
+                'XIRR': 'xirr',
+            };
+            
+            const standardNumericProps = ['units', 'invested', 'value', 'returns'];
+            const percentageProps = ['returnPct', 'xirr'];
+
+            // Create a lookup array based on the order of the actual CSV headers
+            const headerToProp = headers.map(h => {
+                const propKey = Object.keys(propMap).find(key => key.toLowerCase() === h.toLowerCase());
+                return propMap[propKey] || null;
+            }).filter(Boolean);
+
+            const schemeNameIndex = headers.findIndex(h => h.toLowerCase() === 'scheme name');
+            
+            // Parse data rows
+            return dataLines.map(line => {
+                // Use the robust splitter to correctly handle commas inside fields
+                const values = splitCSVLine(line); 
+                const fund = {};
+
+                // Skip rows without a scheme name, often aggregate rows or blanks
+                if (schemeNameIndex === -1 || !values[schemeNameIndex] || values[schemeNameIndex].trim() === '') {
+                    return null;
+                }
+
+                values.forEach((rawValue, index) => {
+                    const prop = headerToProp[index];
+                    if (!prop) return;
+
+                    // 1. Clean value: remove currency symbols and trim spaces
+                    let cleanedValue = rawValue.replace(/[$,₹]/g, '').trim();
+                    
+                    if (standardNumericProps.includes(prop) || percentageProps.includes(prop)) {
+                         // 2. Aggressively strip commas (thousands separators) and percent signs for numeric parsing
+                         cleanedValue = cleanedValue.replace(/,/g, '').replace(/%/g, '');
+                    }
+                    
+                    // Default to 0 if parsing fails
+                    const parsedValue = parseFloat(cleanedValue) || 0;
+                    
+                    if (standardNumericProps.includes(prop)) {
+                        // Store standard numbers (Units, Invested, Value, Returns)
+                        fund[prop] = parsedValue;
+                    } else if (percentageProps.includes(prop)) {
+                        // Percentages (e.g., 15.0 in sheet) are divided by 100 for internal decimal math
+                        fund[prop] = parsedValue / 100;
+                    } else {
+                        // Text properties (Owner, Tag, Scheme Name)
+                        fund[prop] = cleanedValue;
+                    }
+                });
+
+                // Ensure essential fields are present
+                if (!fund.owner || !fund.tag || !fund.schemeName) return null;
+                
+                return fund;
+            }).filter(f => f); // Remove any null entries
+        }
+
+        // --- FILTERING & RENDERING COORDINATION ---
+
+        function getFilteredData(owner, tag) {
+            let filtered = fundData;
+            
+            if (owner !== 'All') {
+                filtered = filtered.filter(f => f.owner === owner);
+            }
+
+            if (tag !== 'All') {
+                filtered = filtered.filter(f => f.tag === tag);
+            }
+
+            return filtered;
+        }
+
+        function updateDashboard() {
+            // Read current filter state
+            currentOwner = document.getElementById('ownerFilter').value;
+            currentTag = document.getElementById('tagFilter') ? document.getElementById('tagFilter').value : 'All';
+            
+            // 1. Data for Metrics and Chart (only filtered by Owner)
+            const metricsChartData = getFilteredData(currentOwner, 'All');
+            
+            // 2. Data for Table (filtered by Owner and Tag)
+            let tableData = getFilteredData(currentOwner, currentTag);
+            tableData = filterSearch(tableData);
+
+            // Update all visual components
+            calculateOverallMetrics(metricsChartData);
+            createRingChart(metricsChartData);
+            applySort(tableData);
+        }
+
+
+        // --- DATA BINDING AND VISUALIZATION ---
+
+        function populateFilters() {
+            const uniqueOwners = [...new Set(fundData.map(f => f.owner))].sort();
+            const ownerFilter = document.getElementById('ownerFilter');
+            
+            ownerFilter.innerHTML = '<option value="All">All Owners</option>';
+            uniqueOwners.forEach(owner => {
+                ownerFilter.innerHTML += `<option value="${owner}" ${owner === currentOwner ? 'selected' : ''}>${owner}</option>`;
+            });
+            
+            populateTagFilter();
+        }
+
+        function populateTagFilter() {
+            const uniqueTags = [...new Set(fundData.map(f => f.tag))].sort();
+            const tagFilter = document.getElementById('tagFilter');
+
+            if (tagFilter) {
+                 tagFilter.innerHTML = '<option value="All">All Tags</option>';
+                 uniqueTags.forEach(tag => {
+                    tagFilter.innerHTML += `<option value="${tag}" ${tag === currentTag ? 'selected' : ''}>${tag}</option>`;
+                 });
+            }
+        }
+        
+        function calculateOverallMetrics(data) {
+            const totalInvested = data.reduce((sum, fund) => sum + fund.invested, 0);
+            const currentValue = data.reduce((sum, fund) => sum + fund.value, 0);
+            const totalReturn = currentValue - totalInvested;
+            
+            // Simple weighted average XIRR (approximation, as true XIRR requires transaction dates)
+            const overallXIRR = (data.reduce((sum, fund) => sum + fund.xirr * fund.invested, 0) / totalInvested) || 0; 
+
+            document.getElementById('totalInvested').textContent = formatCurrency(totalInvested);
+            document.getElementById('currentValue').textContent = formatCurrency(currentValue);
+            document.getElementById('totalReturn').textContent = formatCurrency(totalReturn);
+            document.getElementById('overallXirr').textContent = formatPercent(overallXIRR);
+
+            // Update border color based on Total Return performance
+            const returnElement = document.getElementById('metric-return');
+            returnElement.classList.remove('border-yellow-500', 'border-green-500', 'border-red-500');
+            
+            if (totalReturn > 0) {
+                returnElement.classList.add('border-green-500');
+            } else if (totalReturn < 0) {
+                returnElement.classList.add('border-red-500');
+            } else {
+                returnElement.classList.add('border-yellow-500');
+            }
+        }
+
+        function createRingChart(data) {
+            const ctx = document.getElementById('allocationChart').getContext('2d');
+            
+            if (allocationChart) {
+                allocationChart.destroy();
+            }
+
+            // Group value by Tag
+            const tagAllocation = data.reduce((acc, fund) => {
+                const tag = fund.tag;
+                acc[tag] = (acc[tag] || 0) + fund.value;
+                return acc;
+            }, {});
+
+            const chartRelevantData = Object.entries(tagAllocation).filter(([, value]) => value > 0);
+            const totalValue = chartRelevantData.reduce((sum, [, value]) => sum + value, 0);
+
+            // Simple, predictable color generation
+            const generateColors = (count) => {
+                const colors = [];
+                for (let i = 0; i < count; i++) {
+                    colors.push(`hsl(${(i * 50 + 120) % 360}, 70%, 50%)`); // Start from a more blue-green shade
+                }
+                return colors;
+            };
+
+            const chartData = {
+                labels: chartRelevantData.map(([tag]) => tag),
+                datasets: [{
+                    data: chartRelevantData.map(([, value]) => value),
+                    backgroundColor: generateColors(chartRelevantData.length),
+                    hoverOffset: 8,
+                }]
+            };
+
+            allocationChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '75%', // Ring chart style
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { font: { family: 'Inter', size: 11 } }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) { label += ': '; }
+                                    const value = context.parsed;
+                                    const percentage = totalValue > 0 ? (value / totalValue) * 100 : 0;
+                                    label += formatCurrency(value) + ' (' + percentage.toFixed(1) + '%)';
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderTable(data) {
+            const tbody = document.getElementById('fundTableBody');
+            if (!tbody) return; 
+            tbody.innerHTML = '';
+
+            if (data.length === 0) {
+                tbody.innerHTML = `<tr><td colspan='7' class='px-3 py-4 text-center text-sm text-gray-500'>No funds match the selected criteria.</td></tr>`;
+                return;
+            }
+
+            data.forEach(fund => {
+                const returnClass = fund.returns >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold';
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-100 transition duration-150 ease-in-out';
+                row.innerHTML = `
+                    <td class='px-3 py-4 text-left text-sm font-medium text-gray-900'>${fund.schemeName}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-500 text-right'>${formatUnits(fund.units)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.invested)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.value)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-900 text-right'>${formatCurrency(fund.returns)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm ${returnClass} text-right'>${formatPercent(fund.returnPct)}</td>
+                    <td class='px-3 py-4 whitespace-nowrap text-sm text-gray-700 text-right'>${formatPercent(fund.xirr)}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        // --- FILTERING & SORTING LOGIC ---
+
+        function filterSearch(data) {
+             const schemeSearch = document.getElementById('schemeSearch');
+             if (!schemeSearch) return data;
+             const searchValue = schemeSearch.value.toLowerCase();
+             return data.filter(fund => fund.schemeName.toLowerCase().includes(searchValue));
+        }
+
+        function applySort(data) {
+            
+            data.sort((a, b) => {
+                const aVal = a[tableSort.prop];
+                const bVal = b[tableSort.prop];
+                
+                let comparison = 0;
+                if (aVal > bVal) comparison = 1;
+                else if (aVal < bVal) comparison = -1;
+                else comparison = 0;
+
+                return tableSort.order === 'desc' ? comparison * -1 : comparison;
+            });
+
+            // Update column header icons (optional: not fully implemented in provided CSS but good practice)
+            const headers = document.querySelectorAll('#fundDetailsCard th');
+            headers.forEach(header => {
+                const headerProp = getPropName(header.getAttribute('data-sort'));
+                header.classList.remove('font-extrabold', 'text-indigo-600');
+                if (headerProp === tableSort.prop) {
+                    header.classList.add('font-extrabold', 'text-indigo-600');
+                }
+            });
+
+            renderTable(data);
+        }
+
+        function getPropName(key) {
+            switch(key) {
+                case 'scheme': return 'schemeName';
+                case 'units': return 'units';
+                case 'invested': return 'invested';
+                case 'value': return 'value';
+                case 'return': return 'returns'; 
+                case 'return_pct': return 'returnPct';
+                case 'xirr': return 'xirr';
+                default: return key;
+            }
+        }
+
+        window.sortTable = function(property) {
+            const newProp = getPropName(property);
+            
+            if (tableSort.prop === newProp) {
+                // Toggle order if clicking the same column
+                tableSort.order = tableSort.order === 'asc' ? 'desc' : 'asc';
+            } else {
+                // Default to descending for a new column (highest is usually better)
+                tableSort.prop = newProp;
+                tableSort.order = 'desc'; 
+            }
+             
+            updateDashboard();
+        }
+        
+        // --- DATA FETCHING & INITIALIZATION ---
+        
+        function getErrorMessage(message) {
+            return `<h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2><div class="p-8 text-center text-lg text-red-500">${message}</div>`;
+        }
+
+        function getOriginalTableStructure() {
+            return `
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Fund Details</h2>
+                <div class="mb-4 flex flex-col sm:flex-row gap-3">
+                    <select id="tagFilter" class="filter-select w-full sm:w-auto min-w-[150px]">
+                        <option value="All">Filter by Tag</option>
+                    </select>
+                    <input type="text" id="schemeSearch" placeholder="Search Scheme Name..." 
+                           class="p-3 border border-gray-300 rounded-lg w-full sm:w-1/3 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                           oninput="updateDashboard()"
+                           >
+                    <!-- Sort functionality is now handled by clicking table headers -->
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th scope="col" data-sort="scheme" class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('scheme')">Scheme Name</th>
+                                <th scope="col" data-sort="units" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('units')">Units</th>
+                                <th scope="col" data-sort="invested" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('invested')">Invested</th>
+                                <th scope="col" data-sort="value" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('value')">Value</th>
+                                <th scope="col" data-sort="return" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('return')">Return</th>
+                                <th scope="col" data-sort="return_pct" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer font-extrabold text-indigo-600" onclick="sortTable('return_pct')">Return %</th>
+                                <th scope="col" data-sort="xirr" class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('xirr')">XIRR</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fundTableBody" class="bg-white divide-y divide-gray-200">
+                            <!-- Data rows will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        const setupListeners = () => {
+            const ownerFilter = document.getElementById('ownerFilter');
+            const fundDetailsCard = document.getElementById('fundDetailsCard');
+            
+            if (ownerFilter) ownerFilter.addEventListener('change', updateDashboard);
+
+            // Need to set up listeners for tag filter and search after the table structure is injected
+            // Use event delegation for dynamic elements
+            fundDetailsCard.addEventListener('change', (e) => {
+                if (e.target.id === 'tagFilter') {
+                    updateDashboard();
+                }
+            });
+            // Scheme search input handler is now inline in getOriginalTableStructure
+        };
+        
+        async function fetchAndProcessData() {
+            document.getElementById('loadingStatus').classList.remove('hidden');
+
+            if (isFileProtocol()) {
+                 document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('Data Fetch Error: The browser prevents data fetching from external URLs when the HTML file is opened directly (using `file://`). Please run this file using a local web server.');
+                 // Default to 0 values if fetch fails
+                 document.getElementById('totalInvested').textContent = formatCurrency(0);
+                 document.getElementById('currentValue').textContent = formatCurrency(0);
+                 document.getElementById('totalReturn').textContent = formatCurrency(0);
+                 document.getElementById('overallXirr').textContent = formatPercent(0);
+                 return;
+            }
+            
+            try {
+                const response = await fetch(SHEET_URL);
+                if (!response.ok) { throw new Error(`HTTP error! status: ${response.status}`); }
+                const csvText = await response.text();
+                
+                fundData = parseCSV(csvText);
+
+                if (fundData.length === 0) {
+                    document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('No data found. Check your Google Sheet URL/format or if the sheet is empty.');
+                    return;
+                }
+
+                // Inject the table structure and its filtering/sorting controls
+                document.getElementById('fundDetailsCard').innerHTML = getOriginalTableStructure();
+                
+                // Set up event listeners for newly injected elements
+                setupListeners();
+                
+                // Populate the owner and tag filters
+                populateFilters();
+                
+                // Calculate metrics and render the table/chart
+                updateDashboard();
+
+            } catch (error) {
+                console.error('Error fetching or processing data:', error);
+                document.getElementById('fundDetailsCard').innerHTML = getErrorMessage('Failed to load data. Please confirm the SHEET_URL is correct and published publicly.');
+                
+                // Ensure metrics show 0 if data load fails
+                document.getElementById('totalInvested').textContent = formatCurrency(0);
+                document.getElementById('currentValue').textContent = formatCurrency(0);
+                document.getElementById('totalReturn').textContent = formatCurrency(0);
+                document.getElementById('overallXirr').textContent = formatPercent(0);
+            } finally {
+                document.getElementById('loadingStatus').classList.add('hidden');
+            }
+        }
+
+        // Start initialization when the document is fully loaded
+        document.addEventListener('DOMContentLoaded', fetchAndProcessData);
+    </script>
+</body>
+</html>
+
+
+
+ 
